@@ -13,14 +13,19 @@ import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 import javax.print.attribute.standard.SheetCollate;
 
 
 import dbeas.BaseDao;
+import erp.ReportDatas;
 import message.MyMessage;
 import servers.User;
+import servers.Users;
 
 /**
  * 建立一个用于SelectionKey处理的顶层接口
@@ -42,7 +47,7 @@ interface ServerHandlerBs{
 
 public class ServerHandlerImpl implements ServerHandlerBs {
 	
-    private ByteBuffer cacheBuffer = ByteBuffer.allocate(1024 * 100);
+    private ByteBuffer cacheBuffer = ByteBuffer.allocate(1024 * 10000);
     private boolean cache = false;
     int bodyLen = -1;
     int cacheBufferLen = -1;
@@ -92,43 +97,43 @@ public class ServerHandlerImpl implements ServerHandlerBs {
         byteBuffer.clear();
 
         if(cache){
-            cacheBuffer.flip();
-            byteBuffer.put(cacheBuffer);
+            cacheBuffer.flip();                      //转化成读模式
+            byteBuffer.put(cacheBuffer);             //写入上次缓存
         }
-        int count = socketChannel.read(byteBuffer);
+        try {
+        int count = socketChannel.read(byteBuffer);  //写入这次读到的
         if(count > 0) {
-            byteBuffer.flip();
-//            Log.d("ByteBuffer原始数量：", "--------------------------------------------" + String.valueOf(byteBuffer.remaining()));
+            byteBuffer.flip();                       //转化成读模式
             int position = 0;
             int i = 0;
-            while (byteBuffer.remaining() > 0) {
-//           Log.d("第 ",String.valueOf(i++)+" 次");
-                if (bodyLen == -1) { //没有读出包头，先读包头
-//                    Log.d("进入读包头！", "0000");
-                    if (byteBuffer.remaining() >= head_length) { //可以读出包头，否则缓存
-                        byteBuffer.mark();
-                        byteBuffer.get(headByte);
+            while (byteBuffer.remaining() > 0) {     //如果有可读内容
+                if (bodyLen == -1) {                 //如果没有读出包头，先读包头
+                    if (byteBuffer.remaining() >= head_length) { //可以读出包头，否则缓存 （总包头长度小于4的情况，多包粘连有可以发生）
+                        byteBuffer.mark();           //去除包头
+                        byteBuffer.get(headByte);    //读出包头
                         bodyLen = IntFlidByte.getHeadInt(headByte);
-//                        Log.d("包头长度：", String.valueOf(bodyLen));
                     } else {
                         byteBuffer.reset();
                         cache = true;
                         cacheBuffer.clear();
                         cacheBuffer.put(byteBuffer);
                     }
-                } else {
-//                    Log.d("进入读消息体！还有多少未读：", String.valueOf(byteBuffer.remaining()) + "包体长度： " + bodyLen);
-                    if (byteBuffer.remaining() >= bodyLen) { //大于等于一个包，否则缓存
-                        byte[] bodyByte = new byte[bodyLen];
-                        byteBuffer.get(bodyByte, 0, bodyLen);
+                } else {                                                      //有包头，开始读包体
+                    
+                    if (byteBuffer.remaining() >= bodyLen) {                  //剩余数量大于等于一个包，否则缓存
+                    	                                                      //可以读成一个完整包
+                        byte[] bodyByte = new byte[bodyLen]; 
+                        byteBuffer.get(bodyByte, 0, bodyLen);                 //将所有数据写入bodyByte
                         position += bodyLen;
-                        byteBuffer.mark();
+                        byteBuffer.mark();                                    //去除已读数据（粘包的时候有用） 
                         bodyLen = -1;
-//                        Log.d("读到一个消息", "Position = " + String.valueOf(position));
                         message = (MyMessage) ObjectFlidByte.byteArrayToObject(bodyByte);
-//                        Log.d("消息头：", message.getHeader());
-//                        unbindHeadr(message, null);
+                        
+                        //cacheBuffer 读模式
+                        //byteBuffer  读模式
+                        
                     	switch (message.getHeader()) {
+                    	//登录
                     	case "login" :
                     		if(!User.userLogin(message.getLoginName(), message.getLoginPassword(),message.getObjects(), socketChannel,byteBuffer)) {
                     			socketChannel.shutdownOutput();
@@ -136,29 +141,35 @@ public class ServerHandlerImpl implements ServerHandlerBs {
                     			socketChannel.close();
                     			return;
                     		}
-                    		byteBuffer.flip();
                     		break;
+                    	//创建消息	
                     	case "createMessage" :	
                     		createMessage(message);
-                    		byteBuffer.flip();
                     		break;
+                    	//消息内容	
                     	case "messageContent":
                     		messageContent(message);
-                    		byteBuffer.flip();
-//                    		System.out.println(byteBuffer.remaining());
                     		break;
+                    	//心跳 暂时停用	
                     	case "heartBeat" :
                     		heartBeat(message);
-                    		byteBuffer.flip();
+                    		break;
+                    	//重建消息	
+                    	case "resCreateMessage"	:
+                    		resCreateMessage(message);
+                    		break;
+                    	//ERP报表	
+                    	case "getErpReport"	 :
+                    		erpReport(message);
+                    		break;
+                    	//更新用户资料	
+                    	case "resSatff" :
+                    		resSatff(message);
                     		break;
                     	}
                         cache = false;
                     } else {
-//                        Log.d("进入缓存：", "----------------------------------------上一个包头：" + String.valueOf(bodyLen));
-                        byteBuffer.mark();
-                        byteBuffer.reset();
                         cacheBuffer.clear();
-//                        Log.d("ByteBuffer打入缓存数量：", String.valueOf(byteBuffer.remaining()));
                         cacheBufferLen = byteBuffer.remaining();
                         cacheBuffer.put(byteBuffer);
                         cache = true;
@@ -170,7 +181,112 @@ public class ServerHandlerImpl implements ServerHandlerBs {
         } else if(count == -1){
             socketChannel.close();
         }
+        }catch (IOException e){
+        	String s;
+        	int userId = UsersSocketChannel.getInstance().getUserId(socketChannel);
+        	if(userId == 0) {
+        		s = "未知";
+        	}else {
+        		s = User.getUser(userId).getUserName();
+        	}
+        	
+        	System.out.println(s+" 强迫断开连接！");
+        	socketChannel.close();
+        	
+        }
     }
+	
+	/**
+	 *  用户自身更新自已的头像等资料
+	 * @param message
+	 */
+	private void resSatff(MyMessage message) {
+//		System.out.println("进入resSatff()");
+		Object[] datas = message.getObjects();
+		BaseDao.resSatff(datas);
+	}
+	
+	/**
+	 * ERP报表数据获取和发送方法
+	 * @param message
+	 * @throws SQLException
+	 */
+	private void erpReport(MyMessage message) throws SQLException {		
+		HashMap<String,ArrayList<Object[]>> datas;
+		
+		if(message.getStringContent()== null) {
+//		    datas = ReportDatas.getINSTANCE().getDatas();
+			datas = BaseDao.getErpReportData();
+		}else {
+			datas = BaseDao.getErpReportData(message.getStringContent());
+		}
+		
+//		Set pressKeySet = datas.keySet();
+//		Iterator it = pressKeySet.iterator();
+//		while(it.hasNext()) {
+//			String press = (String)it.next();
+////			System.out.println(press);
+//			ArrayList<Object[]> lotNumbers = (ArrayList<Object[]>)datas.get(press);
+////			System.out.println(lotNumbers.size());
+//			
+//			for(Object[] lot :lotNumbers) {
+//				String lotNumber = (String)lot[0];
+//				int allCount = (int)lot[1];
+//				HashMap<String, HashMap<String, int[]>> colours = (HashMap<String, HashMap<String, int[]>>)lot[2];
+//				
+//				Set colourKeySet = colours.keySet();
+//				Iterator coloursIt = colourKeySet.iterator();
+//				while(coloursIt.hasNext()) {
+//					String colour = (String)coloursIt.next();
+//					HashMap<String, int[]> sizes = (HashMap<String, int[]>)colours.get(colour);
+//					
+//					Set sizeKeySet = sizes.keySet();
+//					Iterator sizeIt = sizeKeySet.iterator();
+//					while(sizeIt.hasNext()) {
+//						String size = (String)sizeIt.next();
+////						System.out.println("工序："+press+"  批号："+lotNumber+"  颜色："+colour+"  尺码："+size);
+//						int[] counts = sizes.get(size);
+//						
+//						int todayCount = (int)counts[0];
+//						int allCounts = (int)counts[1];
+//						
+////						System.out.println("工序："+press+"  批号："+lotNumber+"  颜色："+colour+"  尺码："+size+"  今日完成数："+todayCount+"  总完成："+allCounts);
+//						
+//					}
+//				}
+//			}
+//		}
+		
+		MyMessage rsMessage = new MyMessage(0, new int[]{message.getSender()}, "getErpReport");
+		rsMessage.setObjects(new Object[] {datas});
+		if(datas.size() > 0) {
+		    rsMessage.setStringContent("true");    //表示报表有内容
+		}else {
+			rsMessage.setStringContent("false");   //表示是空报表
+		}
+		
+		User user = User.getUser(message.getSender());
+		NioSocketServer.sendMessage(rsMessage, user);
+	}
+	
+	/**
+	 *  重新创建主消息方法
+	 * @param message
+	 * @throws SQLException
+	 */
+	private void resCreateMessage(MyMessage message) throws SQLException {
+		int[] rsUsers = BaseDao.getMessageMembers(message.getMessageId());
+		String headline = BaseDao.getMessageHeadline(message.getMessageId());
+		int sponsor = BaseDao.getMessageSponsor(message.getMessageId());
+		
+		MyMessage rsMessage = new MyMessage(sponsor, rsUsers, "createMessage");
+		rsMessage.setMessageId(message.getMessageId());
+		rsMessage.setDate(new Date(System.currentTimeMillis()));
+		rsMessage.setStringContent(headline);
+		
+		User user = User.getUser(message.getSender());
+		NioSocketServer.sendMessage(rsMessage, user);
+	}
 
 private void unbindHeadr(MyMessage message ,SocketChannel socketChannel,ByteBuffer byteBuffer) throws IOException,SQLException {
 		// TODO Auto-generated method stub
@@ -198,101 +314,6 @@ private void unbindHeadr(MyMessage message ,SocketChannel socketChannel,ByteBuff
 		
 }
 
-//	public void handleRead(SelectionKey selectionKey) throws IOException, SQLException {
-//		
-//        int head_length = 4;
-//        byte[] headByte = new byte[4];
-//        
-//        MyMessage message = null;
-//		
-//		// TODO Auto-generated method stub
-//		//得到触发事件的通道
-//		SocketChannel socketChannel = (SocketChannel)selectionKey.channel();
-//		ByteBuffer byteBuffer = (ByteBuffer)selectionKey.attachment();//得到附加在KEY里面的buffer类
-//		byteBuffer.clear();
-//		
-//        if(cache){
-//            cacheBuffer.flip();
-//            byteBuffer.put(cacheBuffer);
-//        }
-//		
-//		if(socketChannel.read(byteBuffer) == -1) {//读取buffer里的内容
-//			//通道关闭
-//			UsersSocketChannel.getInstance().removeChannel(socketChannel);
-//			
-//			System.out.println("连接断开... ");
-//		}else {
-//			byteBuffer.flip();
-////			MyMessage message = (MyMessage)ObjectFlidByte.byteArrayToObject(buffer.array());
-//			
-//            int position = 0;
-//            int i = 0;
-//            while (byteBuffer.remaining() > 0) {
-////           Log.d("第 ",String.valueOf(i++)+" 次");
-//                if (bodyLen == -1) { //没有读出包头，先读包头
-////                    Log.d("进入读包头！", "0000");
-//                    if (byteBuffer.remaining() >= head_length) { //可以读出包头，否则缓存
-//                        byteBuffer.mark();
-//                        byteBuffer.get(headByte);
-//                        bodyLen = IntFlidByte.getHeadInt(headByte);
-////                        Log.d("包头长度：", String.valueOf(bodyLen));
-//                    } else {
-//                        byteBuffer.reset();
-//                        cache = true;
-//                        cacheBuffer.clear();
-//                        cacheBuffer.put(byteBuffer);
-//                    }
-//                } else {
-////                    Log.d("进入读消息体！还有多少未读：", String.valueOf(byteBuffer.remaining()) + "包体长度： " + bodyLen);
-//                    if (byteBuffer.remaining() >= bodyLen) { //大于等于一个包，否则缓存
-//                        byte[] bodyByte = new byte[bodyLen];
-//                        byteBuffer.get(bodyByte, 0, bodyLen);
-//                        position += bodyLen;
-//                        byteBuffer.mark();
-//                        bodyLen = -1;
-////                        Log.d("读到一个消息", "Position = " + String.valueOf(position));
-//                        message = (MyMessage) ObjectFlidByte.byteArrayToObject(bodyByte);
-////                        Log.d("消息头：", message.getHeader());
-////                        unbindHeadr(message, null);
-//            			switch (message.getHeader()) {
-//            			case "login" :
-//            				if(!User.userLogin(message.getLoginName(), message.getLoginPassword(), socketChannel,byteBuffer)) {
-//            					socketChannel.shutdownOutput();
-//            					socketChannel.shutdownInput();
-//            					socketChannel.close();
-//            					return;
-//            				}else {
-//            					return;
-//            				}
-// //           				break;
-//            			case "createMessage" :	
-//            				createMessage(message);
-//            				break;
-//            			case "messageContent":
-//            				messageContent(message);
-//            				break;
-//            			case "heartBeat" :
-//            				heartBeat(message);
-//            				break;
-//            			}
-//                        cache = false;
-//                    } else {
-////                        Log.d("进入缓存：", "----------------------------------------上一个包头：" + String.valueOf(bodyLen));
-//                        byteBuffer.mark();
-//                        byteBuffer.reset();
-//                        cacheBuffer.clear();
-// //                       Log.d("ByteBuffer打入缓存数量：", String.valueOf(byteBuffer.remaining()));
-//                        cacheBufferLen = byteBuffer.remaining();
-//                        cacheBuffer.put(byteBuffer);
-//                        cache = true;
-//                        break;
-//                    }
-//                }
-//            }
-//            socketChannel.register(selectionKey.selector(), selectionKey.OP_READ, byteBuffer);			
-//		}
-//	}
-//	
 	private void heartBeat(MyMessage message) {
 		Calendar calendar = Calendar.getInstance();
 		System.out.println(message.getSender() + "发来心跳包 ： "+calendar.get(Calendar.HOUR)+":"+calendar.get(Calendar.MINUTE)+":"+calendar.get(Calendar.SECOND));
@@ -331,7 +352,7 @@ private void unbindHeadr(MyMessage message ,SocketChannel socketChannel,ByteBuff
 		
 		BaseDao.insterMessageMembers(messageId, rsUsers);
 				
-		MyMessage rsMessage = new MyMessage(0, rsUsers, "createMessage");
+		MyMessage rsMessage = new MyMessage(message.getSender(), rsUsers, "createMessage");
 		rsMessage.setMessageId(messageId);
 		rsMessage.setDate(new Date(System.currentTimeMillis()));
 		rsMessage.setStringContent(headline);

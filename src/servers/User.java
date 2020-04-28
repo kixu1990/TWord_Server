@@ -127,22 +127,6 @@ public class User {
 		
 	}
 
-//	public void checkMessageQueue() {
-//		if(!messageQueue.isEmpty()) {
-//			String messageFull;
-//			String message;
-//			String sender;
-//			String[] s;
-//			for(int i=0; i<messageQueue.size(); i++) {
-//				messageFull = messageQueue.get(i);
-//				s = messageFull.split("\n");
-//				sender = s[0];
-//				message = s[1];
-//				addMessage(message, sender);
-//				messageQueue.remove(i);
-//			}
-//		}
-//	}
 	
 	public InetAddress getInetAddress() {
 		return inetAddress;
@@ -164,6 +148,15 @@ public class User {
 		}
 	}
 	
+	/**
+	 * 客户端登录方法
+	 * @param lotMember 用户Id
+	 * @param passwrod 用户密码
+	 * @param object 部门版本信息和人员版本信息    
+	 * @param socketChannel NIO通道
+	 * @param buffer 
+	 * @return true=登录成功，false=登录失败
+	 */
 	public static Boolean userLogin(String lotMember,String passwrod,Object[] object,SocketChannel socketChannel,Buffer buffer) {
 		Boolean b = false;
 		BaseDao baseDao = new BaseDao();
@@ -217,136 +210,13 @@ public class User {
 		}
 		return b;
 	}
-	
-	public void userLogin(String lotMember,String passwrod,InetAddress address) {
-		inetAddress = address;
-		Boolean b = false;
-		BaseDao baseDao = new BaseDao();
-		String sql = "select * from tb_users where lotMember = ?";
-		try {
-			ArrayList<User> list = (ArrayList<User>)baseDao.query(sql, new BeanListHandler(User.class), lotMember);
-			for(int i=0; i<list.size(); i++) {
-				if(list.get(i).getPassword().equals(passwrod)) {
-					MyMessage message = new MyMessage(0, new int[] {list.get(i).getUserId()}, "login");
-					message.setStringContent("yes");
-					try {
-					Socket socket = new Socket(inetAddress,PORT);
-					OutputStream ops = socket.getOutputStream();
-					ObjectOutputStream oos = new ObjectOutputStream(ops);
-					oos.writeObject(message);
-					System.out.println("发送信息至："+inetAddress+" : "+message.getStringContent());
-					oos.close();
-					ops.close();
-					socket.close();
-					System.out.println("已发送LOGIN信息。。。"+inetAddress.toString());
-					}catch (Exception e) {
-						// TODO: handle exception
-						e.printStackTrace();
-					}
-				}
-			}
-		} catch (SQLException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-	}
-	
+
 	public Boolean sendMessage(MyMessage message) {
 
 			return NioSocketServer.sendMessage(message, this);
 		
 	}
 	
-//	public Boolean addMessage(MyMessage message) {
-//		if(inetAddress != null) {
-//			if(sendCheckLink()) {
-//			for(int i=0;i<100;i++) {
-//				try {
-//					if(isOnline == ONLINE) {
-//						Socket socket = new Socket(inetAddress,PORT);
-//						OutputStream ops = socket.getOutputStream();
-//						ObjectOutputStream oos = new ObjectOutputStream(ops);
-//						oos.writeObject(message);
-//						System.out.println("发送信息至："+inetAddress+" : "+message.getStringContent());
-//						oos.close();
-//						ops.close();
-//						socket.close();
-//						isOnline = ONT_ONLINE;
-//						return true;
-//					}
-//					Thread.sleep(60);
-//					System.out.println("等待"+(i+=60)+"ms！");
-//				}catch (Exception e) {
-//					// TODO: handle exception
-//					e.printStackTrace();
-//				}
-//			}
-//			messageQueue2.add(message);
-//			return false;
-//			}else {
-//			    messageQueue2.add(message);
-//			    return false;
-//			}
-//		}else {
-//			messageQueue2.add(message);
-//			return false;
-//		}
-//	}
-	
-//	public Boolean addMessage(String message,String sender) {
-//		String messageFull = sender+"\n"+message;
-//		if (inetAddress != null) {
-//		sendCheckLink();
-//		for(int i=0; i<100; i++) {
-//			try {
-//				Thread.sleep(50);
-//				System.out.println("发送测试"+i+"  "+isOnline+"user名: "+this.toString());
-//				if(isOnline == ONLINE) {
-//					Socket socket = new Socket(inetAddress, PORT);
-//					OutputStream ops = socket.getOutputStream();
-//					byte[] b = messageFull.getBytes("utf-8");
-//					ops.write(b);
-//					System.out.println("发送信息至： "+inetAddress+"  :  "+messageFull);
-//					ops.close();
-//					socket.close();
-//					isOnline = ONT_ONLINE;
-//					return true;
-//				}
-//			} catch (Exception e) {
-//				// TODO Auto-generated catch block
-//				e.printStackTrace();
-//			}
-//		}
-//		messageQueue.add(messageFull);
-//		return false;
-//		}else {
-//			messageQueue.add(messageFull);
-//			return false;
-//		}
-//		
-//	}
-	
-//	private boolean sendCheckLink() {
-//		Socket socket;
-//		System.out.println("发送测试信息至："+inetAddress.toString());
-//		try {
-//			socket = new Socket(inetAddress,PORT);
-//			OutputStream ops = socket.getOutputStream();
-//			ObjectOutputStream oos = new ObjectOutputStream(ops);
-//			MyMessage message = new MyMessage(0, new String[] {"server"}, "clicklink");
-//			oos.writeObject(message);
-//			System.out.println("发送测试信息完成！");
-//			oos.close();
-//			ops.close();
-//			socket.close();
-//			return true;
-//		} catch (IOException e) {
-//			// TODO Auto-generated catch block
-//			System.out.println("发送测试信息失败！");
-//			return false;
-//			
-//		}
-//	}
 	
 	public List<String> getMessageQueue(){
 		return messageQueue;

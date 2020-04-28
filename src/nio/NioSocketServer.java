@@ -51,7 +51,8 @@ public class NioSocketServer {
 						}
 					}catch (IOException e) {
 						// TODO: handle exception
-						e.printStackTrace();
+						//e.printStackTrace();
+						System.out.println();
 						SocketChannel channel = (SocketChannel)key.channel();
 						channel.close();
 					} catch (SQLException e) {
@@ -81,7 +82,7 @@ public class NioSocketServer {
 		if(it.hasNext()) {
 			try {
 			socketChannel = (SocketChannel) it.next();
-			buffer = (ByteBuffer)m.get(socketChannel);
+			buffer = ByteBuffer.allocate(1024*1000);
 			buffer.clear();
 			buffer.put(getHeadByte(messageBytes.length));
 			System.out.println(messageBytes.length);
@@ -94,7 +95,7 @@ public class NioSocketServer {
 //				e.printStackTrace();
 				return false;
 			}
-			System.out.println("发送信息成功！");
+			System.out.println("发送信息成功！ 通道： "+socketChannel.toString());
 			return true;
 		}
 		}

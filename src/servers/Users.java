@@ -13,7 +13,7 @@ public class Users {
 	
 	public static Users INSTANCE = new Users();
 	
-	private Users() {}		
+	private Users() {}	
 	
 	public static Users getINSTANCE() {
 		return INSTANCE;

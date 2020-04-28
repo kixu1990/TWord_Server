@@ -44,6 +44,25 @@ public class UsersSocketChannel {
 
 	}
 	
+	public int getUserId(SocketChannel socketChannel) {
+		int id = 0;
+		Set keySet = usersSocketChannel.keySet();
+		Iterator it = keySet.iterator();
+		while(it.hasNext()) {
+			int userId = (int) it.next();
+			HashMap map = usersSocketChannel.get(userId);
+			Set mapKeySet = map.keySet();
+			Iterator mapIt = mapKeySet.iterator();
+			while(mapIt.hasNext()) {
+				SocketChannel channel = (SocketChannel)mapIt.next();
+				if(channel.equals(socketChannel)) {
+					id = userId; 
+				}
+			}
+		}
+		return id;
+	}
+	
 	public void removeChannel(SocketChannel socketChannel) {
 		int removerId = 0;
 		Set keySet = usersSocketChannel.keySet();
@@ -84,6 +103,7 @@ public class UsersSocketChannel {
 		HashMap<SocketChannel, Buffer> m = new HashMap<SocketChannel, Buffer>();
 		m.put(socketChannel, buffer);
 		usersSocketChannel.put(userId, m);
+		System.out.println("存放的通道数量："+usersSocketChannel.size());
 	}
 
 }
