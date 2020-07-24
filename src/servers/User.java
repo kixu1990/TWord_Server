@@ -163,6 +163,8 @@ public class User {
 		String sql = "select * from tb_users where lotMember = ?";
 		try {
 			ArrayList<User> list = (ArrayList<User>)baseDao.query(sql, new BeanListHandler(User.class), lotMember);
+			System.out.println(list.size());
+			
 			for(int i=0; i<list.size(); i++) {
 				if(list.get(i).getPassword().equals(passwrod)) {
 					UsersSocketChannel.getInstance().setSocketChannel(list.get(i).getUserId(), socketChannel,buffer);

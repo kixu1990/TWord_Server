@@ -28,11 +28,11 @@ public class ReadExcel {
 	private static POIFSFileSystem POIS;
 	
 	
-	public static ArrayList<Object[]> readErpExcel() throws IOException {
+	public static ArrayList<Object[]> readErpExcel(String part) throws IOException {
 		ArrayList<Object[]> readDatas = new ArrayList<Object[]>();
 		
 		try {
-			 in = new FileInputStream("d:/252525.xls");
+			 in = new FileInputStream(part);
 			 POIS = new POIFSFileSystem(in);
 			
 			HSSFWorkbook workbook = new HSSFWorkbook(POIS);
@@ -49,7 +49,7 @@ public class ReadExcel {
 			}
 			
 			
-			for(int rowNum=0; rowNum<sheet.getLastRowNum()+1; rowNum++) {
+			for(int rowNum=0; rowNum<sheet.getLastRowNum(); rowNum++) {
 				HSSFRow hsRow = sheet.getRow(rowNum);
 				Object[] data = new Object[8];
 				
@@ -58,21 +58,21 @@ public class ReadExcel {
 						HSSFCell hsRowCell = hsRow.getCell(cellNum);
 						if(hsRowCell != null) {
 							//ArrayList<Object[]{发织单号，批号，条码，发织数，工序，颜色，尺码，收货时间}>
-//							System.out.print(""+hsRowCell.getColumnIndex()+""+hsRowCell.getRowIndex()+ "\t");
+//							System.out.print(""+hsRowCell.getColumnIndex()+"—"+hsRowCell.getRowIndex()+ "\t");
 							switch (cellNum) {
-							case 0 : data[0] = hsRowCell.getStringCellValue();
+							case 1 : data[0] = hsRowCell.getStringCellValue();
 							         break;
-							case 1 : data[1] = hsRowCell.getStringCellValue();
+							case 4 : data[1] = hsRowCell.getStringCellValue();
 							         break;
-							case 2 : data[2] = hsRowCell.getNumericCellValue();
+							case 20 : data[2] = hsRowCell.getStringCellValue();
 							         break;
-							case 3 : data[3] = hsRowCell.getNumericCellValue();
+							case 18 : data[3] = hsRowCell.getNumericCellValue();
 							         break;
-							case 4 : data[4] = hsRowCell.getStringCellValue();
+							case 6 : data[4] = (hsRowCell.getStringCellValue()).substring(3);
 							         break;
-							case 5 : data[5] = hsRowCell.getStringCellValue();
+							case 19 : data[5] = hsRowCell.getStringCellValue();
 							         break;
-							case 6 : data[6] = hsRowCell.getStringCellValue();
+							case 15 : data[6] = hsRowCell.getStringCellValue();
 							         break;
 							}
 						}

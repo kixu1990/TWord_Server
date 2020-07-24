@@ -1,6 +1,10 @@
 package nio;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
@@ -150,7 +154,7 @@ public class ServerHandlerImpl implements ServerHandlerBs {
                     	case "messageContent":
                     		messageContent(message);
                     		break;
-                    	//心跳 暂时停用	
+                    	//心跳 此分支暂时停用	
                     	case "heartBeat" :
                     		heartBeat(message);
                     		break;
@@ -165,6 +169,18 @@ public class ServerHandlerImpl implements ServerHandlerBs {
                     	//更新用户资料	
                     	case "resSatff" :
                     		resSatff(message);
+                    		break;
+                    	//检查是否需要更新APP
+                    	case "chickResApp" :
+                    		chickResApp(message);
+                    		break;
+                    	//更新App	
+                    	case "resApp" :
+                    		resApp(message);
+                    		break;
+                    	//更新ERP数据
+                    	case "erpDatas" :
+                    		getErpDatas(message);
                     		break;
                     	}
                         cache = false;
@@ -197,6 +213,91 @@ public class ServerHandlerImpl implements ServerHandlerBs {
     }
 	
 	/**
+	 * 获取ERP报表数据
+	 * @param message
+	 */
+	private void getErpDatas(MyMessage message) {
+		ArrayList<Object[]> datas = (ArrayList<Object[]>) message.getObjects()[0];
+		System.out.println("接收到的ERPDATAS容量： "+datas.size());
+		if(datas.size() != 0) {
+			try {
+				BaseDao.insterErpReportData(datas);
+			} catch (SQLException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	/**
+	 * 检查是否需要更新APP
+	 * @param message
+	 */
+	private void chickResApp(MyMessage message) {
+		MyMessage rsMessage = new MyMessage(0, new int[]{message.getSender()}, "chickResApp");
+		String appVersions = message.getStringContent();
+		File file = new File("d:/twordApps/resApp");
+		String fileName = "";
+		String[] fileNames = file.list();
+		for(int i=0; i<fileNames.length; i++) {
+			fileName = fileNames[i];
+		}
+		if(!appVersions.equals(fileName)) {
+			rsMessage.setStringContent("true");
+			File fileAPP = new File("d:/twordApps/resApp/"+fileName);
+			int appSize = (int) ((fileAPP.length()/1024)/1024);
+			rsMessage.setObjects(new Object[] {appSize});
+		}else {
+			rsMessage.setStringContent("false");
+		}
+		
+		User user = User.getUser(message.getSender());
+		NioSocketServer.sendMessage(rsMessage, user);
+	}
+	
+	/**
+	 * 检查app是否需要更新，如果需要则发送更新包
+	 * @param message
+	 * @throws IOException 
+	 */
+	private void resApp(MyMessage message) throws IOException  {
+		String appVersions = message.getStringContent();
+		File file = new File("d:/twordApps/resApp");
+		String fileName = "";
+		String[] fileNames = file.list();
+		for(int i=0; i<fileNames.length; i++) {
+			fileName = fileNames[i];
+		}
+		if(!appVersions.equals(fileName)) {
+			File appFile = new File("d:/twordApps/resApp/"+fileName);
+			long size = appFile.length();
+			InputStream in = null;
+			try {
+				in = new FileInputStream(appFile);
+				byte[] buffer = new byte[(int) size];
+				in.read(buffer);
+				MyMessage rsMessage = new MyMessage(0, new int[]{message.getSender()}, "resApp");
+				rsMessage.setStringContent(fileName);
+				rsMessage.setObjects(new Object[] {buffer});
+				
+				User user = User.getUser(message.getSender());
+				NioSocketServer.sendMessage(rsMessage, user);
+				System.out.println("需要更新，发送更新包！");
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}finally {
+				in.close();
+			}			
+		}else {
+			MyMessage reMessage = new MyMessage(0, new int[] {message.getSender()},	"resApp");
+			reMessage.setStringContent("false");
+			User user = User.getUser(message.getSender());
+			NioSocketServer.sendMessage(reMessage, user);
+		}
+	}
+	
+	/**
 	 *  用户自身更新自已的头像等资料
 	 * @param message
 	 */
@@ -221,41 +322,42 @@ public class ServerHandlerImpl implements ServerHandlerBs {
 			datas = BaseDao.getErpReportData(message.getStringContent());
 		}
 		
-//		Set pressKeySet = datas.keySet();
-//		Iterator it = pressKeySet.iterator();
-//		while(it.hasNext()) {
-//			String press = (String)it.next();
-////			System.out.println(press);
-//			ArrayList<Object[]> lotNumbers = (ArrayList<Object[]>)datas.get(press);
-////			System.out.println(lotNumbers.size());
-//			
-//			for(Object[] lot :lotNumbers) {
-//				String lotNumber = (String)lot[0];
-//				int allCount = (int)lot[1];
-//				HashMap<String, HashMap<String, int[]>> colours = (HashMap<String, HashMap<String, int[]>>)lot[2];
-//				
-//				Set colourKeySet = colours.keySet();
-//				Iterator coloursIt = colourKeySet.iterator();
-//				while(coloursIt.hasNext()) {
-//					String colour = (String)coloursIt.next();
-//					HashMap<String, int[]> sizes = (HashMap<String, int[]>)colours.get(colour);
-//					
-//					Set sizeKeySet = sizes.keySet();
-//					Iterator sizeIt = sizeKeySet.iterator();
-//					while(sizeIt.hasNext()) {
-//						String size = (String)sizeIt.next();
-////						System.out.println("工序："+press+"  批号："+lotNumber+"  颜色："+colour+"  尺码："+size);
-//						int[] counts = sizes.get(size);
-//						
-//						int todayCount = (int)counts[0];
-//						int allCounts = (int)counts[1];
-//						
-////						System.out.println("工序："+press+"  批号："+lotNumber+"  颜色："+colour+"  尺码："+size+"  今日完成数："+todayCount+"  总完成："+allCounts);
-//						
-//					}
-//				}
-//			}
-//		}
+		Set pressKeySet = datas.keySet();
+		Iterator it = pressKeySet.iterator();
+		while(it.hasNext()) {
+			String press = (String)it.next();
+//			System.out.println(press);
+			ArrayList<Object[]> lotNumbers = (ArrayList<Object[]>)datas.get(press);
+//			System.out.println(lotNumbers.size());
+			
+			for(Object[] lot :lotNumbers) {
+				String lotNumber = (String)lot[0];
+//				System.out.println("部门："+press+"  批号："+lotNumber);
+				int allCount = (int)lot[1];
+				HashMap<String, HashMap<String, int[]>> colours = (HashMap<String, HashMap<String, int[]>>)lot[2];
+				
+				Set colourKeySet = colours.keySet();
+				Iterator coloursIt = colourKeySet.iterator();
+				while(coloursIt.hasNext()) {
+					String colour = (String)coloursIt.next();
+					HashMap<String, int[]> sizes = (HashMap<String, int[]>)colours.get(colour);
+					
+					Set sizeKeySet = sizes.keySet();
+					Iterator sizeIt = sizeKeySet.iterator();
+					while(sizeIt.hasNext()) {
+						String size = (String)sizeIt.next();
+//						System.out.println("工序："+press+"  批号："+lotNumber+"  颜色："+colour+"  尺码："+size);
+						int[] counts = sizes.get(size);
+						
+						int todayCount = (int)counts[0];
+						int allCounts = (int)counts[1];
+						
+//						System.out.println("工序："+press+"  批号："+lotNumber+"  颜色："+colour+"  尺码："+size+"  今日完成数："+todayCount+"  总完成："+allCounts);
+						
+					}
+				}
+			}
+		}
 		
 		MyMessage rsMessage = new MyMessage(0, new int[]{message.getSender()}, "getErpReport");
 		rsMessage.setObjects(new Object[] {datas});

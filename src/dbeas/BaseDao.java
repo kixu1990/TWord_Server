@@ -19,6 +19,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 
 import javax.imageio.stream.FileImageInputStream;
 
@@ -247,8 +248,10 @@ public class BaseDao {
 						users.add(user);//更新人员信息
 					}
 				}else {                                            //如果数据库人员信息在客户端不存在，则为新人员
-					Object[] user = {userId,userName,department,getUserImage(userImage),userVersion,post,email,phoneNumber,state}; //添加新人员信息
-					users.add(user);
+					if(userImage != null) {                //避免特殊用户如： erpDatas,oa等
+					    Object[] user = {userId,userName,department,getUserImage(userImage),userVersion,post,email,phoneNumber,state}; //添加新人员信息
+					     users.add(user);
+					}
 				}
 			}
 						
@@ -624,39 +627,45 @@ public class BaseDao {
 	 * @param src ArrayList<Object[]{发织单号，批号，条码，发织数，工序，颜色，尺码，收货时间}>
 	 */
 	public static void insterErpReportData(ArrayList<Object[]> src) throws SQLException {
-		String sql = "insert into tb_erp_datas(lot,lotNumber,barcode,lotCount,process,colour,size,time) values (?,?,?,?,?,?,?,?)";
+		String sql = "insert into tb_erp_datas(lot,lotNumber,barcode,lotCount,process,colour,size,time,colourSizeCount) values (?,?,?,?,?,?,?,?,?)";
 		
 		Connection conn = null;
 		PreparedStatement pstmt = null;
 		try {
 			conn = C3p0Utils.getConnection();
+			conn.setAutoCommit(false);         //取消自动提交事务，提高插入效率
 			pstmt = conn.prepareStatement(sql);
 //			System.out.println(src.size());
+			int i = 1;
 			for(Object[] data : src) {
-//				System.out.println(data[0]+""+data[1]+data[2]+data[3]+data[4]+data[5]+data[6]+data[7]);
+//				System.out.println("第"+(i++)+"|  "+data[0]+"|  "+data[1]+"|   "+data[2]+"|   "+data[3]+"|   "+data[4]+"|   "+data[5]+"|   "+data[6]+"|  "+data[7]+"|  "+data[8]);
 				pstmt.setString(1, (String)data[0]); //发织单号
 				pstmt.setString(2, (String)data[1]); //批号
-				pstmt.setInt(3, ((Double)data[2]).intValue());       //条码
+				pstmt.setString(3, (String)data[2]);      //条码
 				pstmt.setInt(4, ((Double)data[3]).intValue());       //发织数
 				pstmt.setString(5, (String)data[4]); //工序
 				pstmt.setString(6, (String)data[5]); //颜色
 				pstmt.setString(7, (String)data[6]); //尺码
 				java.sql.Date time = new java.sql.Date(System.currentTimeMillis());
 				pstmt.setDate(8, time);              //收货时间 现在  
+				pstmt.setInt(9, ((Double)data[7]).intValue());
 				pstmt.addBatch();                    //添加批量处理
 			}
-			pstmt.executeBatch();                    //批量插入
+			pstmt.executeBatch(); //批量插入
+			conn.commit();        //手动提交事务，提高效率
 		}catch (SQLException e) {
 			// TODO: handle exception
+			e.printStackTrace();
+		}finally {
 			pstmt.close();
 			conn.close();
 		}
 	}
 	
 	/**
-	 * 提取某个批号的ERP的实时数据
+	 * 提取某个批号的ERP的实时数据,此方法作废
 	 */
-	public static HashMap<String, ArrayList<Object[]>> getErpReportData(String searchLot) throws SQLException{
+	public static HashMap<String, ArrayList<Object[]>> getErpReportData1(String searchLot) throws SQLException{
         //----------------------------------------------------------------------------------------------
         //   数据构造： 按照如下结构逐层打包和解包
         //   map<工序，批号>
@@ -781,11 +790,516 @@ public class BaseDao {
 	}
 	
 	/**
-	 * 提取ERP的实时数据
+	 * 提取某个批号的ERP的实时数据,优化SQL语句
+	 * @param searchLot
+	 * @return
+	 * @throws SQLException
+	 */
+	public static HashMap<String, ArrayList<Object[]>> getErpReportData(String searchLot) throws SQLException{		
+        //----------------------------------------------------------------------------------------------
+        //   数据构造： 按照如下结构逐层打包和解包
+        //   map<工序，批号>
+        //              |
+        //             list<object[]{0-批号,1-发织数，2-颜色}>
+        //                                        |
+        //                                         map<颜色，尺码>
+        //                                                   |
+        //                                                 map<尺码,数量>
+        //                                                           |
+        //                                                          int[]{0-今日完成数，1-总完成数，3-每色每码发织数}
+		// 发织单号-lot 批号-lotNumber 条码-barcode 发织数-lotCount 工序-process 颜色-colour 尺码-size 收货时间-time 
+        //-----------------------------------------------------------------------------------------------
+		
+		Calendar calendar = Calendar.getInstance();                   
+		calendar.add(Calendar.DATE, -1);                                                //24小时内
+		java.sql.Date dateLine = new java.sql.Date(calendar.getTimeInMillis());         //得到时间
+		
+		long nowTime =System.currentTimeMillis();                                       //当天0点时间
+		long todayStartTime =nowTime - ((nowTime + TimeZone.getDefault().getRawOffset()) % (24 * 60 * 60 * 1000L));
+		java.sql.Date todayLine = new java.sql.Date(todayStartTime);
+
+		HashMap<String, ArrayList<Object[]>> datas = new HashMap<String, ArrayList<Object[]>>();
+		
+		String sqlCount = "select process,lotNumber,colour,lotCount,colourSizeCount,size,count(barcode) as counts"
+				+ " from tb_erp_datas "
+				+ " where lotNumber like ?"
+				+ " group by process,lotNumber,colour,size"
+				+ " order by lotNumber";
+		
+		String sqlTodayCount = "select process,lotNumber,lotCount,colour,size,count(barcode) as counts"
+				+ " from tb_erp_datas "
+				+ " where time > ? and lotNumber like ?"
+				+ " group by process,lotNumber,colour,size"
+				+ " order by lotNumber";
+		
+		Connection conn = null;
+		PreparedStatement pstmt = null;
+		
+		try {
+			conn = C3p0Utils.getConnection();
+			pstmt = conn.prepareStatement(sqlTodayCount);
+			pstmt.setDate(1, todayLine);
+			pstmt.setString(2, "%"+searchLot+"%");
+			ResultSet todayCountRs = pstmt.executeQuery();
+			
+			long t1 = System.currentTimeMillis();
+			System.out.println("todayCountSQL用时："+(t1-nowTime));
+			//------------------------------------------------------------------
+			//Map<工序，批号>
+			//         Map<批号，颜色>
+			//                  Map<颜色，尺寸>
+			//                           Map<尺寸，数量>
+			//------------------------------------------------------------------
+			
+			
+			HashMap<String, HashMap<String, HashMap<String, HashMap<String, Integer>>>> todayCountMap = new HashMap<String, HashMap<String,HashMap<String,HashMap<String,Integer>>>>();
+			while(todayCountRs.next()) {
+				String process = todayCountRs.getString("process");
+				String lotNumber = todayCountRs.getString("lotNumber");
+				String colour = todayCountRs.getString("colour");
+				String size = todayCountRs.getString("size");
+				int counts = todayCountRs.getInt("counts");
+				
+				HashMap<String, Integer> sizeMap = new HashMap<String, Integer>();
+				sizeMap.put(size, counts);
+				HashMap<String, HashMap<String, Integer>> colourMap = new HashMap<String, HashMap<String,Integer>>();
+				colourMap.put(colour, sizeMap);
+				HashMap<String, HashMap<String, HashMap<String, Integer>>> lotNumberMap = new HashMap<String, HashMap<String,HashMap<String,Integer>>>();
+				lotNumberMap.put(lotNumber, colourMap);
+				
+				if(todayCountMap.get(process) == null) {
+					todayCountMap.put(process, lotNumberMap);
+				}else {
+					if(todayCountMap.get(process).get(lotNumber) == null) {
+						todayCountMap.get(process).put(lotNumber, colourMap);
+					}else {
+						if(todayCountMap.get(process).get(lotNumber).get(colour) == null) {
+							todayCountMap.get(process).get(lotNumber).put(colour, sizeMap);
+						}else {
+							if(todayCountMap.get(process).get(lotNumber).get(colour).get(size) == null) {
+								todayCountMap.get(process).get(lotNumber).get(colour).put(size, counts);
+							}
+						}
+					}
+				}
+							
+			}	
+			
+			pstmt = conn.prepareStatement(sqlCount);
+			pstmt.setString(1, "%"+searchLot+"%");
+			ResultSet countRs = pstmt.executeQuery();
+			
+			long t2 = System.currentTimeMillis();
+			System.out.println("countSQL用时："+(t2-t1));
+			
+			while(countRs.next()) {
+				String process = countRs.getString("process");
+				String lotNumber = countRs.getString("lotNumber");
+				int lotCount = countRs.getInt("lotCount");
+				String colour = countRs.getString("colour");
+				String size = countRs.getString("size");
+				int count = countRs.getInt("counts");
+				int todaycount = 0;
+				if(todayCountMap.size() == 0 || todayCountMap.get(process) == null) {
+					todaycount = 0;
+				}else {
+					if(todayCountMap.get(process).get(lotNumber) == null) {
+						todaycount = 0;
+					}else {
+						if(todayCountMap.get(process).get(lotNumber).get(colour) == null) {
+							todaycount = 0;
+						}else {
+							if(todayCountMap.get(process).get(lotNumber).get(colour).get(size) == null) {
+								todaycount = 0;
+							}else {
+								todaycount = todayCountMap.get(process).get(lotNumber).get(colour).get(size);
+							}
+						}
+					}
+				}
+
+				int colourSizeCount = countRs.getInt("colourSizeCount");
+//				System.out.println(process+":"+lotNumber+":"+lotCount+":"+colour+":"+size+":"+todaycount+":"+count);
+			
+				int[] counts = {todaycount,count,colourSizeCount};
+				HashMap<String, int[]> sizeHashMap = new HashMap<String, int[]>();
+				sizeHashMap.put(size, counts);
+				HashMap<String, HashMap<String, int[]>> colourHashMap = new HashMap<String, HashMap<String,int[]>>();
+				colourHashMap.put(colour, sizeHashMap);
+				Object[] lotNumbers = {lotNumber,lotCount,colourHashMap};
+				ArrayList<Object[]> lotNumberList = new ArrayList<Object[]>();
+				lotNumberList.add(lotNumbers);
+							
+				if(datas.get(process) == null) {
+					datas.put(process, lotNumberList);
+				}else {
+					
+					boolean b = false;
+					for(int i=0; i<datas.get(process).size(); i++) {
+						if(datas.get(process).get(i)[0].equals(lotNumber)) {
+							b = true;
+						}
+					}
+					if(!b) {
+						datas.get(process).add(lotNumbers);
+					}else {
+						for(int i=0; i<datas.get(process).size(); i++) {
+							if(datas.get(process).get(i)[0].equals(lotNumber)) {
+								if(((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).get(colour) == null) {
+									((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).put(colour, sizeHashMap);
+								}else {
+									if(((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).get(colour).get(size) == null) {
+										((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).get(colour).put(size, counts);
+									}
+								}
+							}
+					}
+				}
+							
+			}
+			}
+			
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}finally {
+			conn.close();
+			pstmt.close();
+		}
+		
+		return datas;
+	}
+	
+	
+	/**
+	 * 获取ERP当天报表数据，此方法作废
+	 * @return
+	 * @throws SQLException
+	 */
+	public static HashMap<String, ArrayList<Object[]>> getErpReportData1() throws SQLException{		
+        //----------------------------------------------------------------------------------------------
+        //   数据构造： 按照如下结构逐层打包和解包
+        //   map<工序，批号>
+        //              |
+        //             list<object[]{0-批号,1-发织数，2-颜色}>
+        //                                        |
+        //                                         map<颜色，尺码>
+        //                                                   |
+        //                                                 map<尺码,数量>
+        //                                                           |
+        //                                                          int[]{0-今日完成数，1-总完成数}
+		// 发织单号-lot 批号-lotNumber 条码-barcode 发织数-lotCount 工序-process 颜色-colour 尺码-size 收货时间-time 
+        //-----------------------------------------------------------------------------------------------
+		
+		Calendar calendar = Calendar.getInstance();                   
+		calendar.add(Calendar.DATE, -1);                                                //减去一天 
+		java.sql.Date dateLine = new java.sql.Date(calendar.getTimeInMillis());         //得到时间
+		
+		HashMap<String, ArrayList<Object[]>> datas = new HashMap<String, ArrayList<Object[]>>();
+		
+		String sqlCount = "select process,lotNumber,colour,size,count(barcode) as counts from tb_erp_datas "
+				+ " where lotNumber in (select lotNumber from tb_erp_datas where time >?)"
+				+ " group by process,lotNumber,colour,size order by lotNumber";
+		
+		String sqlTodayCount = "select process,lotNumber,lotCount,colour,size,count(barcode) as counts from tb_erp_datas "
+				+ " where time > ? and lotNumber in (select lotNumber from tb_erp_datas where time >?)"
+				+ " group by process,lotNumber,colour,size order by lotNumber";
+		
+		Connection conn = null;
+		PreparedStatement pstmt = null;
+		
+		try {
+			conn = C3p0Utils.getConnection();
+			pstmt = conn.prepareStatement(sqlCount);
+			pstmt.setDate(1, dateLine);
+			ResultSet countRs = pstmt.executeQuery();
+			//------------------------------------------------------------------
+			//Map<工序，批号>
+			//         Map<批号，颜色>
+			//                  Map<颜色，尺寸>
+			//                           Map<尺寸，数量>
+			//------------------------------------------------------------------
+			HashMap<String, HashMap<String, HashMap<String, HashMap<String, Integer>>>> countMap = new HashMap<String, HashMap<String,HashMap<String,HashMap<String,Integer>>>>();
+			while(countRs.next()) {
+				String process = countRs.getString("process");
+				String lotNumber = countRs.getString("lotNumber");
+				String colour = countRs.getString("colour");
+				String size = countRs.getString("size");
+				int counts = countRs.getInt("counts");
+				
+				HashMap<String, Integer> sizeMap = new HashMap<String, Integer>();
+				sizeMap.put(size, counts);
+				HashMap<String, HashMap<String, Integer>> colourMap = new HashMap<String, HashMap<String,Integer>>();
+				colourMap.put(colour, sizeMap);
+				HashMap<String, HashMap<String, HashMap<String, Integer>>> lotNumberMap = new HashMap<String, HashMap<String,HashMap<String,Integer>>>();
+				lotNumberMap.put(lotNumber, colourMap);
+				
+				if(countMap.get(process) == null) {
+					countMap.put(process, lotNumberMap);
+				}else {
+					if(countMap.get(process).get(lotNumber) == null) {
+						countMap.get(process).put(lotNumber, colourMap);
+					}else {
+						if(countMap.get(process).get(lotNumber).get(colour) == null) {
+							countMap.get(process).get(lotNumber).put(colour, sizeMap);
+						}else {
+							if(countMap.get(process).get(lotNumber).get(colour).get(size) == null) {
+								countMap.get(process).get(lotNumber).get(colour).put(size, counts);
+							}
+						}
+					}
+				}
+							
+			}	
+			
+			pstmt = conn.prepareStatement(sqlTodayCount);
+			pstmt.setDate(1, dateLine);
+			pstmt.setDate(2, dateLine);
+			ResultSet todayCountRs = pstmt.executeQuery();
+			
+			while(todayCountRs.next()) {
+				String process = todayCountRs.getString("process");
+				String lotNumber = todayCountRs.getString("lotNumber");
+				int lotCount = todayCountRs.getInt("lotCount");
+				String colour = todayCountRs.getString("colour");
+				String size = todayCountRs.getString("size");
+				int todaycount = todayCountRs.getInt("counts");
+				int count = countMap.get(process).get(lotNumber).get(colour).get(size);
+//				System.out.println(process+":"+lotNumber+":"+lotCount+":"+colour+":"+size+":"+todaycount+":"+count);
+				
+				
+				int[] counts = {todaycount,count};
+				HashMap<String, int[]> sizeHashMap = new HashMap<String, int[]>();
+				sizeHashMap.put(size, counts);
+				HashMap<String, HashMap<String, int[]>> colourHashMap = new HashMap<String, HashMap<String,int[]>>();
+				colourHashMap.put(colour, sizeHashMap);
+				Object[] lotNumbers = {lotNumber,lotCount,colourHashMap};
+				ArrayList<Object[]> lotNumberList = new ArrayList<Object[]>();
+				lotNumberList.add(lotNumbers);
+				
+				
+				if(datas.get(process) == null) {
+					datas.put(process, lotNumberList);
+				}else {
+					
+					boolean b = false;
+					for(int i=0; i<datas.get(process).size(); i++) {
+						if(datas.get(process).get(i)[0].equals(lotNumber)) {
+							b = true;
+						}
+					}
+					if(!b) {
+						datas.get(process).add(lotNumbers);
+					}else {
+						for(int i=0; i<datas.get(process).size(); i++) {
+							if(datas.get(process).get(i)[0].equals(lotNumber)) {
+								if(((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).get(colour) == null) {
+									((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).put(colour, sizeHashMap);
+								}else {
+									if(((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).get(colour).get(size) == null) {
+										((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).get(colour).put(size, counts);
+									}
+								}
+							}
+					}
+				}
+							
+			}
+			}
+			
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}finally {
+			conn.close();
+			pstmt.close();
+		}
+		
+		return datas;
+	}
+	
+	
+	/**
+	 * 获取ERP当天报表数据，改进SQL语法
+	 * @return
+	 * @throws SQLException
+	 */
+	public static HashMap<String, ArrayList<Object[]>> getErpReportData() throws SQLException{		
+        //----------------------------------------------------------------------------------------------
+        //   数据构造： 按照如下结构逐层打包和解包
+        //   map<工序，批号>
+        //              |
+        //             list<object[]{0-批号,1-发织数，2-颜色}>
+        //                                        |
+        //                                         map<颜色，尺码>
+        //                                                   |
+        //                                                 map<尺码,数量>
+        //                                                           |
+        //                                                          int[]{0-今日完成数，1-总完成数，3-每色每码发织数}
+		// 发织单号-lot 批号-lotNumber 条码-barcode 发织数-lotCount 工序-process 颜色-colour 尺码-size 收货时间-time 
+        //-----------------------------------------------------------------------------------------------
+		
+		Calendar calendar = Calendar.getInstance();                   
+		calendar.add(Calendar.DATE, -1);                                                //昨天0点 
+		java.sql.Date dateLine = new java.sql.Date(calendar.getTimeInMillis());         //得到时间
+		
+		long nowTime =System.currentTimeMillis();
+		long todayStartTime =nowTime - ((nowTime + TimeZone.getDefault().getRawOffset()) % (24 * 60 * 60 * 1000L));
+		java.sql.Date todayLine = new java.sql.Date(todayStartTime);
+		
+		HashMap<String, ArrayList<Object[]>> datas = new HashMap<String, ArrayList<Object[]>>();
+		
+		String sqlCount = "select process,lotNumber,colour,lotCount,colourSizeCount,size,count(barcode) as counts from tb_erp_datas "
+				+ " where lot in (select lot from tb_erp_datas where time >?)"
+				+ " group by process,lotNumber,colour,size order by lotNumber";
+		
+		String sqlTodayCount = "select process,lotNumber,lotCount,colour,size,count(barcode) as counts from tb_erp_datas "
+				+ " where time > ? and lot in (select lot from tb_erp_datas where time >?)"
+				+ " group by process,lotNumber,colour,size order by lotNumber";
+		
+		Connection conn = null;
+		PreparedStatement pstmt = null;
+		
+		try {
+			conn = C3p0Utils.getConnection();
+			pstmt = conn.prepareStatement(sqlTodayCount);
+			pstmt.setDate(1, dateLine);
+			pstmt.setDate(2, dateLine);
+			ResultSet todayCountRs = pstmt.executeQuery();
+			
+			long t1 = System.currentTimeMillis();
+			System.out.println("todayCountSQL用时："+(t1-nowTime));
+			//------------------------------------------------------------------
+			//Map<工序，批号>
+			//         Map<批号，颜色>
+			//                  Map<颜色，尺寸>
+			//                           Map<尺寸，数量>
+			//------------------------------------------------------------------
+			
+			
+			HashMap<String, HashMap<String, HashMap<String, HashMap<String, Integer>>>> todayCountMap = new HashMap<String, HashMap<String,HashMap<String,HashMap<String,Integer>>>>();
+			while(todayCountRs.next()) {
+				String process = todayCountRs.getString("process");
+				String lotNumber = todayCountRs.getString("lotNumber");
+				String colour = todayCountRs.getString("colour");
+				String size = todayCountRs.getString("size");
+				int counts = todayCountRs.getInt("counts");
+				
+				HashMap<String, Integer> sizeMap = new HashMap<String, Integer>();
+				sizeMap.put(size, counts);
+				HashMap<String, HashMap<String, Integer>> colourMap = new HashMap<String, HashMap<String,Integer>>();
+				colourMap.put(colour, sizeMap);
+				HashMap<String, HashMap<String, HashMap<String, Integer>>> lotNumberMap = new HashMap<String, HashMap<String,HashMap<String,Integer>>>();
+				lotNumberMap.put(lotNumber, colourMap);
+				
+				if(todayCountMap.get(process) == null) {
+					todayCountMap.put(process, lotNumberMap);
+				}else {
+					if(todayCountMap.get(process).get(lotNumber) == null) {
+						todayCountMap.get(process).put(lotNumber, colourMap);
+					}else {
+						if(todayCountMap.get(process).get(lotNumber).get(colour) == null) {
+							todayCountMap.get(process).get(lotNumber).put(colour, sizeMap);
+						}else {
+							if(todayCountMap.get(process).get(lotNumber).get(colour).get(size) == null) {
+								todayCountMap.get(process).get(lotNumber).get(colour).put(size, counts);
+							}
+						}
+					}
+				}
+							
+			}	
+			
+			pstmt = conn.prepareStatement(sqlCount);
+			pstmt.setDate(1, dateLine);
+			ResultSet countRs = pstmt.executeQuery();
+			
+			long t2 = System.currentTimeMillis();
+			System.out.println("todayCountSQL用时："+(t2-t1));
+			
+			while(countRs.next()) {
+				String process = countRs.getString("process");
+				String lotNumber = countRs.getString("lotNumber");
+				int lotCount = countRs.getInt("lotCount");
+				String colour = countRs.getString("colour");
+				String size = countRs.getString("size");
+				int count = countRs.getInt("counts");
+				int todaycount = 0;
+				if(todayCountMap.size() == 0 || todayCountMap.get(process) == null) {
+					todaycount = 0;
+				}else {
+					if(todayCountMap.get(process).get(lotNumber) == null) {
+						todaycount = 0;
+					}else {
+						if(todayCountMap.get(process).get(lotNumber).get(colour) == null) {
+							todaycount = 0;
+						}else {
+							if(todayCountMap.get(process).get(lotNumber).get(colour).get(size) == null) {
+								todaycount = 0;
+							}else {
+								todaycount = todayCountMap.get(process).get(lotNumber).get(colour).get(size);
+							}
+						}
+					}
+				}
+				int colourSizeCount = countRs.getInt("colourSizeCount");
+//				System.out.println(process+":"+lotNumber+":"+lotCount+":"+colour+":"+size+":"+todaycount+":"+count);
+			
+				int[] counts = {todaycount,count,colourSizeCount};
+				HashMap<String, int[]> sizeHashMap = new HashMap<String, int[]>();
+				sizeHashMap.put(size, counts);
+				HashMap<String, HashMap<String, int[]>> colourHashMap = new HashMap<String, HashMap<String,int[]>>();
+				colourHashMap.put(colour, sizeHashMap);
+				Object[] lotNumbers = {lotNumber,lotCount,colourHashMap};
+				ArrayList<Object[]> lotNumberList = new ArrayList<Object[]>();
+				lotNumberList.add(lotNumbers);
+							
+				if(datas.get(process) == null) {
+					datas.put(process, lotNumberList);
+				}else {
+					
+					boolean b = false;
+					for(int i=0; i<datas.get(process).size(); i++) {
+						if(datas.get(process).get(i)[0].equals(lotNumber)) {
+							b = true;
+						}
+					}
+					if(!b) {
+						datas.get(process).add(lotNumbers);
+					}else {
+						for(int i=0; i<datas.get(process).size(); i++) {
+							if(datas.get(process).get(i)[0].equals(lotNumber)) {
+								if(((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).get(colour) == null) {
+									((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).put(colour, sizeHashMap);
+								}else {
+									if(((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).get(colour).get(size) == null) {
+										((HashMap<String, HashMap<String,int[]>>)datas.get(process).get(i)[2]).get(colour).put(size, counts);
+									}
+								}
+							}
+					}
+				}
+							
+			}
+			}
+			
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}finally {
+			conn.close();
+			pstmt.close();
+		}
+		
+		return datas;
+	}
+	
+	/**
+	 * 提取ERP的实时数据，这个方法做废
 	 * @return
 	 * @throws SQLException 
 	 */
-	public static HashMap<String, ArrayList<Object[]>> getErpReportData() throws SQLException {
+	public static HashMap<String, ArrayList<Object[]>> getErpReportData2() throws SQLException {
         //----------------------------------------------------------------------------------------------
         //   数据构造： 按照如下结构逐层打包和解包
         //   map<工序，批号>
@@ -813,6 +1327,8 @@ public class BaseDao {
 		
 		Connection conn = null;
 		PreparedStatement pstmt = null;
+		
+		long timeStrat = System.currentTimeMillis();
 		
 		HashMap<String,ArrayList<Object[]>> processMap = null;     //打包好的数据源
 		
@@ -899,6 +1415,7 @@ public class BaseDao {
 				processMap.put(process, aLLoters);                            //工序批号打包
 			}
 			
+			
 		}catch (SQLException e) {
 			// TODO: handle exception
 			e.printStackTrace();
@@ -906,6 +1423,10 @@ public class BaseDao {
 			pstmt.close();
 			conn.close();
 		}
+		
+		long timeEnd = System.currentTimeMillis();
+		
+		System.out.println("数据库提取用时："+(timeEnd-timeStrat));
 		
 		return processMap;
 	}

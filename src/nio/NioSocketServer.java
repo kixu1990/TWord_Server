@@ -28,7 +28,7 @@ public class NioSocketServer {
 		try(ServerSocketChannel serverSocketChannel = ServerSocketChannel.open()){
 			serverSocketChannel.socket().bind(new InetSocketAddress(11001));
 			serverSocketChannel.configureBlocking(false);
-			Selector selector = Selector.open();
+			Selector selector = Selector.open();			
 			serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
 			
 			System.out.println("NIO·þÎñÆ÷Æô¶¯...");
@@ -72,9 +72,9 @@ public class NioSocketServer {
 	
 	public static boolean sendMessage(MyMessage message,User user) {
 		byte[] messageBytes = ObjectFlidByte.objectToByteArray(message);
+				
 		SocketChannel socketChannel = null;
-		ByteBuffer buffer = null;
-		
+		ByteBuffer buffer = null;		
 		HashMap<SocketChannel, Buffer> m = UsersSocketChannel.getInstance().getSocketChannel(user.getUserId());
 		if(m != null) {
 		Set keySet = m.keySet();
@@ -82,13 +82,20 @@ public class NioSocketServer {
 		if(it.hasNext()) {
 			try {
 			socketChannel = (SocketChannel) it.next();
-			buffer = ByteBuffer.allocate(1024*1000);
+			buffer = ByteBuffer.allocate(messageBytes.length+4);
 			buffer.clear();
 			buffer.put(getHeadByte(messageBytes.length));
 			System.out.println(messageBytes.length);
 			buffer.put(messageBytes);
 			buffer.flip();
-			socketChannel.write(buffer);
+			int sendSize = 0;
+			while(buffer.remaining() > 0) {
+				sendSize += socketChannel.write(buffer);
+//				System.out.println(sendSize+"    "+buffer.remaining());
+				buffer.position(sendSize);
+				buffer.mark();
+			}
+			
 			buffer.clear();
 			}catch (IOException e) {
 				// TODO: handle exception
@@ -101,7 +108,7 @@ public class NioSocketServer {
 		}
 		return false;
 	}
-	
+
 	public static void sendMessage(MyMessage message,SocketChannel socketChannel,ByteBuffer byteBuffer) throws IOException {
 		byte[] messageBytes = ObjectFlidByte.objectToByteArray(message);
 		byteBuffer.clear();
